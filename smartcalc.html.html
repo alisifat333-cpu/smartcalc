@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#111318" />
+<title>SmartCalc</title>
+<style>
+  * { box-sizing: border-box; }
+  :root { color-scheme: dark; --bg:#101116; --panel:#19191f; --text:#f5f4f8; --muted:#8d8b98; --accent:#ff9f43; --accent2:#ffbd70; --key:#24242c; --keyHover:#303039; }
+  body { margin:0; min-height:100dvh; display:grid; place-items:center; background:radial-gradient(ellipse at 50% 0%, #28222b 0%, var(--bg) 60%); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; padding:18px; }
+  .app { width:min(100%,390px); border:1px solid #2b2930; background:rgba(24,24,30,.96); border-radius:28px; padding:20px; box-shadow:0 28px 80px #0007; }
+  header { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+  .brand { font-weight:750; letter-spacing:.2px; font-size:1.15rem; } .brand span { color:var(--accent); }
+  .history-toggle { border:1px solid #34333b; background:#222229; color:#d7d4dc; border-radius:12px; padding:9px 12px; cursor:pointer; font-size:.86rem; }
+  .display { min-height:144px; padding:14px 8px 18px; display:flex; flex-direction:column; justify-content:flex-end; text-align:right; overflow:hidden; }
+  .expression { min-height:32px; color:var(--muted); font-size:1.15rem; overflow-wrap:anywhere; }
+  .result { font-size:clamp(2.25rem, 10vw, 3.4rem); font-weight:650; letter-spacing:-1.6px; overflow-wrap:anywhere; line-height:1.15; }
+  .keys { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  button.key { min-width:0; aspect-ratio:1.12; border:0; border-radius:18px; background:var(--key); color:var(--text); font-size:1.3rem; font-weight:560; cursor:pointer; transition:transform .08s, background .15s; user-select:none; -webkit-tap-highlight-color:transparent; }
+  button.key:hover { background:var(--keyHover); } button.key:active { transform:scale(.96); }
+  .utility { color:#ffbd70!important; background:#30271f!important; } .operator { color:var(--accent)!important; background:#30241c!important; font-size:1.5rem!important; }
+  .equals { background:var(--accent)!important; color:#23170e!important; font-size:1.55rem!important; font-weight:750!important; } .equals:hover { background:var(--accent2)!important; }
+  .zero { grid-column:span 2; aspect-ratio:auto!important; }
+  .history { display:none; border-top:1px solid #33323a; margin-top:14px; padding-top:12px; max-height:190px; overflow:auto; }
+  .history.open { display:block; } .history h3 { margin:0 0 8px; font-size:.85rem; color:var(--muted); font-weight:600; }
+  .history-item { display:flex; justify-content:space-between; gap:12px; padding:8px 3px; color:#c9c7d0; font-size:.9rem; border-bottom:1px solid #2a2930; }
+  .history-item span:last-child { color:var(--accent2); font-weight:600; }
+  .hint { text-align:center; color:#777580; font-size:.72rem; margin-top:14px; }
+  @media (max-width:360px) { .app { padding:15px; border-radius:23px; } .keys { gap:8px; } button.key { border-radius:15px; font-size:1.15rem; } }
+</style>
+</head>
+<body>
+<div class="app" role="application" aria-label="SmartCalc calculator">
+  <header><div class="brand">Smart<span>Calc</span></div><button class="history-toggle" id="historyToggle" aria-expanded="false">History ↗</button></header>
+  <section class="display" aria-live="polite" aria-atomic="true">
+    <div class="expression" id="expression"></div><div class="result" id="result">0</div>
+  </section>
+  <section class="keys" aria-label="Calculator keypad">
+    <button class="key utility" data-action="clear">AC</button><button class="key utility" data-action="backspace">⌫</button><button class="key utility" data-value="%">%</button><button class="key operator" data-value="÷">÷</button>
+    <button class="key" data-value="7">7</button><button class="key" data-value="8">8</button><button class="key" data-value="9">9</button><button class="key operator" data-value="×">×</button>
+    <button class="key" data-value="4">4</button><button class="key" data-value="5">5</button><button class="key" data-value="6">6</button><button class="key operator" data-value="−">−</button>
+    <button class="key" data-value="1">1</button><button class="key" data-value="2">2</button><button class="key" data-value="3">3</button><button class="key operator" data-value="+">+</button>
+    <button class="key zero" data-value="0">0</button><button class="key" data-value=".">.</button><button class="key equals" data-action="equals">=</button>
+  </section>
+  <section class="history" id="history"><h3>Recent calculations</h3><div id="historyList"></div></section>
+  <div class="hint">Tip: you can use your keyboard, too</div>
+</div>
+<script>
+(() => {
+  const expressionEl = document.getElementById('expression');
+  const resultEl = document.getElementById('result');
+  const historyPanel = document.getElementById('history');
+  const historyList = document.getElementById('historyList');
+  const historyToggle = document.getElementById('historyToggle');
+  let expression = '';
+  let justEvaluated = false;
+  const history = [];
+  const operators = ['+','−','×','÷'];
+
+  function pretty(expr) { return expr.replace(/\*/g,'×').replace(/\//g,'÷').replace(/-/g,'−'); }
+  function update() { expressionEl.textContent = pretty(expression); resultEl.textContent = expression ? preview(expression) : '0'; }
+  function preview(expr) { try { const val = calculate(expr); return format(val); } catch { return ''; } }
+  function format(n) { if (!Number.isFinite(n)) return 'Error'; if (Math.abs(n) < 1e-12) n=0; return Number(n.toPrecision(12)).toString(); }
+  function append(value) {
+    if (justEvaluated && /[0-9.]/.test(value)) expression = '';
+    justEvaluated = false;
+    if (operators.includes(value)) {
+      if (!expression && value !== '−') return;
+      if (operators.includes(expression.slice(-1))) expression = expression.slice(0,-1);
+      expression += value;
+    } else if (value === '.') {
+      const current = expression.split(/[+−×÷%]/).pop();
+      if (!current.includes('.')) expression += current ? '.' : '0.';
+    } else if (value === '%') {
+      if (/\d$/.test(expression)) expression += '%';
+    } else expression += value;
+    update();
+  }
+  function clearAll() { expression=''; justEvaluated=false; expressionEl.textContent=''; resultEl.textContent='0'; }
+  function backspace() { if(justEvaluated) { clearAll(); return; } expression=expression.slice(0,-1); update(); }
+  function tokenize(input) {
+    const s=input.replace(/×/g,'*').replace(/÷/g,'/').replace(/−/g,'-');
+    const tokens=[]; let i=0;
+    while(i<s.length) {
+      if(/\s/.test(s[i])) { i++; continue; }
+      if(/[0-9.]/.test(s[i])) { let num=''; while(i<s.length && /[0-9.]/.test(s[i])) num+=s[i++]; if((num.match(/\./g)||[]).length>1) throw Error('Bad number'); tokens.push(Number(num)); continue; }
+      if('+-*/()%'.includes(s[i])) tokens.push(s[i++]); else throw Error('Invalid token');
+    }
+    return tokens;
+  }
+  function calculate(input) {
+    const t=tokenize(input); let p=0;
+    function primary() {
+      if(t[p]==='+' || t[p]==='-') { const sign=t[p++]; const v=primary(); return sign==='-'?-v:v; }
+      if(t[p]==='(') { p++; const v=addSub(); if(t[p]!==')') throw Error('Missing bracket'); p++; return v; }
+      if(typeof t[p]==='number') { let v=t[p++]; if(t[p]==='%') {v/=100;p++;} return v; }
+      throw Error('Incomplete');
+    }
+    function mulDiv() { let v=primary(); while(t[p]==='*'||t[p]==='/') { const op=t[p++], b=primary(); if(op==='/'&&b===0) throw Error('Division by zero'); v=op==='*'?v*b:v/b; } return v; }
+    function addSub() { let v=mulDiv(); while(t[p]==='+'||t[p]==='-') { const op=t[p++], b=mulDiv(); v=op==='+'?v+b:v-b; } return v; }
+    const value=addSub(); if(p!==t.length) throw Error('Incomplete'); return value;
+  }
+  function doEquals() {
+    if(!expression) return;
+    try { const answer=calculate(expression); const formatted=format(answer); if(formatted==='Error') throw Error('Error'); history.unshift({expr:pretty(expression), answer:formatted}); if(history.length>12)history.pop(); renderHistory(); expressionEl.textContent=pretty(expression)+' ='; expression=formatted; resultEl.textContent=formatted; justEvaluated=true; }
+    catch { resultEl.textContent='Error'; justEvaluated=true; }
+  }
+  function renderHistory() { historyList.innerHTML=''; if(!history.length) {historyList.textContent='No calculations yet';return;} history.forEach(item=>{const row=document.createElement('div');row.className='history-item';const a=document.createElement('span'),b=document.createElement('span');a.textContent=item.expr;b.textContent=item.answer;row.append(a,b);historyList.append(row);}); }
+  document.querySelector('.keys').addEventListener('click',e=>{const btn=e.target.closest('button');if(!btn)return; const action=btn.dataset.action; if(action==='clear')clearAll();else if(action==='backspace')backspace();else if(action==='equals')doEquals();else if(btn.dataset.value)append(btn.dataset.value);});
+  historyToggle.addEventListener('click',()=>{const open=historyPanel.classList.toggle('open');historyToggle.setAttribute('aria-expanded',open);historyToggle.textContent=open?'History ↙':'History ↗';});
+  document.addEventListener('keydown',e=>{if(/[0-9]/.test(e.key))append(e.key);else if(e.key==='.')append('.');else if(e.key==='+')append('+');else if(e.key==='-')append('−');else if(e.key==='*')append('×');else if(e.key==='/'){e.preventDefault();append('÷');}else if(e.key==='%')append('%');});
+  // Keyboard actions (kept separate for clarity)
+  document.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key==='='){e.preventDefault();doEquals();}else if(e.key==='Backspace'){backspace();}else if(e.key==='Escape'){clearAll();}});
+  update();
+})();
+</script>
+</body>
+</html>
